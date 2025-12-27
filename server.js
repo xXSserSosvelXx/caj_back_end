@@ -287,6 +287,44 @@ function _getStatusMessage(status) {
   return messages[status] || 'Estado desconocido';
 }
 
+// ========== PÁGINA DE REDIRECCIÓN POST-ONBOARDING ==========
+app.get('/onboarding-completo', (req, res) => {
+  res.send(`
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Onboarding Completado</title>
+        <style>
+            body { font-family: sans-serif; display: flex; justify-content: center; align-items: center; min-height: 100vh; margin: 0; background: #f5f5f5; }
+            .container { text-align: center; background: white; padding: 2rem; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); max-width: 400px; }
+            .icon { font-size: 48px; color: #4CAF50; margin-bottom: 1rem; }
+            h1 { color: #333; margin: 0 0 0.5rem 0; font-size: 1.5rem; }
+            p { color: #666; margin: 0 0 1.5rem 0; font-size: 14px; }
+            .note { background: #e8f5e8; padding: 0.75rem; border-radius: 8px; font-size: 12px; color: #2e7d32; }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <div class="icon">✅</div>
+            <h1>¡Onboarding completado!</h1>
+            <p>Tu cuenta de Stripe Connect ha sido configurada exitosamente.</p>
+            <div class="note">
+                Si estás en una ventana emergente, se cerrará automáticamente.<br>
+                De lo contrario, puedes cerrar esta pestaña.
+            </div>
+        </div>
+        <script>
+            if (window.opener && window.opener !== window) {
+                window.close();
+            }
+        </script>
+    </body>
+    </html>
+  `);
+});
+
 // ========== INICIAR SERVIDOR ==========
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
