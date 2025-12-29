@@ -30,18 +30,15 @@ app.post('/api/create-vendor-account', async (req, res) => {
   try {
     const { email, name, phone } = req.body;
 
-    // Crear cuenta Connect estándar (para vendedores)
     const account = await stripe.accounts.create({
       type: 'standard',
-      country: 'US', // Cuentas en USD para vendedores paraguayos
+      country: 'US',
       email: email,
+      // ✅ Elimina business_type e individual
+      // Stripe los recoge en el onboarding
       capabilities: {
         card_payments: { requested: true },
         transfers: { requested: true },
-      },
-      business_type: 'individual',
-      individual: {
-        name: name,
       },
     });
 
