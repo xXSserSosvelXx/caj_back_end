@@ -22,6 +22,16 @@ const transporter = nodemailer.createTransport({
   },
 });
 
+app.get('/api/stripe-key', (req, res) => {
+  // Asegúrate de que STRIPE_PUBLISHABLE_KEY esté en tus variables de entorno (Render)
+  const publishableKey = process.env.STRIPE_PUBLISHABLE_KEY;
+
+  if (!publishableKey) {
+    return res.status(500).json({ error: 'Stripe publishable key no configurada' });
+  }
+
+  res.json({ publishableKey });
+});
 
 // Ruta raíz
 app.get('/', (req, res) => {
