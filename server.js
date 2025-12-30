@@ -3,12 +3,24 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+const nodemailer = require('nodemailer'); // ✅ Añadido para correos
 
 const app = express();
 
 // Middleware
 app.use(cors());
 app.use(express.json());
+
+// Configuración de correo para enviar vendorId
+const transporter = nodemailer.createTransporter({
+  host: 'smtp.gmail.com',
+  port: 587,
+  secure: false,
+  auth: {
+    user: process.env.EMAIL_USER, // tu-email@gmail.com
+    pass: process.env.EMAIL_PASS, // contraseña de aplicación de Gmail
+  },
+});
 
 // Ruta raíz
 app.get('/', (req, res) => {
@@ -20,6 +32,7 @@ app.get('/', (req, res) => {
       vendorOnboarding: 'GET /api/vendor-onboarding/:vendor_id',
       createPaymentIntent: 'POST /api/create-payment-intent',
       createSubscription: 'POST /api/create-subscription',
+      sendVendorEmail: 'POST /api/send-vendor-email', // ✅ Nueva endpoint
       // ... otros endpoints
     }
   });
@@ -30,16 +43,16 @@ app.post('/api/create-vendor-account', async (req, res) => {
   try {
     const { email, name, phone } = req.body;
 
+    // Crear cuenta Connect estándar (para vendedores)
     const account = await stripe.accounts.create({
       type: 'standard',
-      country: 'US',
+      country: 'US', // Cuentas en USD para vendedores paraguayos
       email: email,
-      // ✅ Elimina business_type e individual
-      // Stripe los recoge en el onboarding
       capabilities: {
         card_payments: { requested: true },
         transfers: { requested: true },
       },
+      // ✅ Eliminado business_type e individual para evitar errores
     });
 
     res.json({ 
@@ -48,6 +61,61 @@ app.post('/api/create-vendor-account', async (req, res) => {
     });
   } catch (error) {
     console.error('Error creando cuenta vendedor:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// ========== ENVIAR CORREO CON vendorId ========== ✅ NUEVA FUNCIÓN
+app.post('/api/send-vendor-email', async (req, res) => {
+  try {
+    const { email, vendorId, name } = req.body;
+
+    if (!email || !vendorId || !name) {
+      return res.status(400).json({ error: 'Faltan datos requeridos' });
+    }
+
+    const mailOptions = {
+      from: `"Cajero Emprender" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: '✅ ¡Tu cuenta de vendedor ha sido creada!',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #1976d2;">¡Bienvenido, ${name}!</h2>
+          <p>Tu cuenta de vendedor en <strong>Cajero Emprender</strong> ha sido creada exitosamente.</p>
+          
+          <div style="background-color: #f5f5f5; padding: 15px; border-radius: 8px; margin: 20px 0;">
+            <p><strong>ID de vendedor:</strong></p>
+            <p style="font-family: monospace; background: white; padding: 10px; border-radius: 4px; word-break: break-all;">
+              ${vendorId}
+            </p>
+          </div>
+
+          <p>Guarda este ID en un lugar seguro. Lo necesitarás para:</p>
+          <ul>
+            <li>Verificar el estado de tu cuenta</li>
+            <li>Resolver problemas técnicos</li>
+            <li>Recibir asistencia personalizada</li>
+          </ul>
+
+          <p><strong>Próximos pasos:</strong></p>
+          <ol>
+            <li>Completa tu configuración bancaria</li>
+            <li>Empieza a crear tus productos</li>
+            <li>¡Recibe pagos directamente en tu cuenta!</li>
+          </ol>
+
+          <hr style="margin: 30px 0;">
+          <p style="color: #666; font-size: 12px;">
+            Este es un mensaje automático. Por favor, no respondas a este correo.
+          </p>
+        </div>
+      `,
+    };
+
+    await transporter.sendMail(mailOptions);
+    res.json({ success: true, message: 'Correo enviado exitosamente' });
+  } catch (error) {
+    console.error('Error enviando correo:', error);
     res.status(500).json({ error: error.message });
   }
 });
@@ -194,11 +262,6 @@ app.get('/api/vendor-status/:vendor_id', async (req, res) => {
 });
 
 // ========== ENDPOINTS EXISTENTES (sin cambios) ==========
-// Mantén todos tus endpoints actuales para:
-// - create-customer
-// - save-payment-method  
-// - list-payment-methods
-// - payment-status
 
 // ========== CREAR CUSTOMER ==========
 app.post('/api/create-customer', async (req, res) => {
