@@ -3,7 +3,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const nodemailer = require('nodemailer'); // ✅ Añadido para correos
+const nodemailer = require('nodemailer');
 
 const app = express();
 
@@ -11,16 +11,17 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Configuración de correo para enviar vendorId
-const transporter = nodemailer.createTransporter({
+// Configuración de correo
+const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
   port: 587,
   secure: false,
   auth: {
-    user: process.env.EMAIL_USER, // tu-email@gmail.com
-    pass: process.env.EMAIL_PASS, // contraseña de aplicación de Gmail
+    user: process.env.EMAIL_USER,
+    pass: process.env.EMAIL_PASS,
   },
 });
+
 
 // Ruta raíz
 app.get('/', (req, res) => {
@@ -32,8 +33,7 @@ app.get('/', (req, res) => {
       vendorOnboarding: 'GET /api/vendor-onboarding/:vendor_id',
       createPaymentIntent: 'POST /api/create-payment-intent',
       createSubscription: 'POST /api/create-subscription',
-      sendVendorEmail: 'POST /api/send-vendor-email', // ✅ Nueva endpoint
-      // ... otros endpoints
+      sendVendorEmail: 'POST /api/send-vendor-email',
     }
   });
 });
@@ -43,16 +43,15 @@ app.post('/api/create-vendor-account', async (req, res) => {
   try {
     const { email, name, phone } = req.body;
 
-    // Crear cuenta Connect estándar (para vendedores)
     const account = await stripe.accounts.create({
       type: 'standard',
-      country: 'US', // Cuentas en USD para vendedores paraguayos
+      country: 'US',
       email: email,
       capabilities: {
         card_payments: { requested: true },
         transfers: { requested: true },
       },
-      // ✅ Eliminado business_type e individual para evitar errores
+      // ✅ Sin business_type ni individual (evita errores)
     });
 
     res.json({ 
@@ -65,7 +64,7 @@ app.post('/api/create-vendor-account', async (req, res) => {
   }
 });
 
-// ========== ENVIAR CORREO CON vendorId ========== ✅ NUEVA FUNCIÓN
+// ========== ENVIAR CORREO CON vendorId ==========
 app.post('/api/send-vendor-email', async (req, res) => {
   try {
     const { email, vendorId, name } = req.body;
@@ -140,21 +139,19 @@ app.get('/api/vendor-onboarding/:vendor_id', async (req, res) => {
   }
 });
 
-// ========== CREAR PAYMENT INTENT PARA CAJA (CON COMISIÓN 5%) ==========
+// ========== CREAR PAYMENT INTENT PARA CAJA ==========
 app.post('/api/create-payment-intent', async (req, res) => {
   try {
     const { 
-      amount,           // Monto total en centavos
-      vendor_id,        // ID del vendedor (opcional)
-      currency = 'usd', // Siempre USD para Connect
+      amount,
+      vendor_id,
+      currency = 'usd',
       description = 'Pago en Cajero Emprender',
-      is_subscription = false // Indica si es suscripción
+      is_subscription = false
     } = req.body;
 
-    // Convertir a centavos si es necesario
     const amountInCents = typeof amount === 'number' ? amount : Math.round(amount * 100);
 
-    // Configuración para suscripciones (100% a tu cuenta)
     if (is_subscription) {
       const paymentIntent = await stripe.paymentIntents.create({
         amount: amountInCents,
@@ -170,10 +167,9 @@ app.post('/api/create-payment-intent', async (req, res) => {
       });
     }
 
-    // Configuración para caja (5% comisión, 95% al vendedor)
     if (vendor_id) {
-      const commission_rate = 0.05; // 5%
-      const application_fee = Math.max(50, Math.round(amountInCents * commission_rate)); // Mínimo 50 centavos
+      const commission_rate = 0.05;
+      const application_fee = Math.max(50, Math.round(amountInCents * commission_rate));
       const vendor_amount = amountInCents - application_fee;
 
       const paymentIntent = await stripe.paymentIntents.create({
@@ -196,7 +192,6 @@ app.post('/api/create-payment-intent', async (req, res) => {
       });
     }
 
-    // Si no hay vendor_id, pago va 100% a tu cuenta
     const paymentIntent = await stripe.paymentIntents.create({
       amount: amountInCents,
       currency: currency,
@@ -209,23 +204,16 @@ app.post('/api/create-payment-intent', async (req, res) => {
       client_secret: paymentIntent.client_secret,
       status: paymentIntent.status,
     });
-
   } catch (error) {
     console.error('Error creando PaymentIntent:', error);
     res.status(500).json({ error: error.message });
   }
 });
 
-// ========== CREAR SUSCRIPCIÓN (100% A TU CUENTA) ==========
+// ========== CREAR SUSCRIPCIÓN ==========
 app.post('/api/create-subscription', async (req, res) => {
   try {
-    const { 
-      customer_id, 
-      price_id, 
-      vendor_id // Opcional, pero para suscripciones va 100% a ti
-    } = req.body;
-
-    // Crear suscripción directamente en tu cuenta (no usa Connect)
+    const { customer_id, price_id, vendor_id } = req.body;
     const subscription = await stripe.subscriptions.create({
       customer: customer_id,
       items: [{ price: price_id }],
@@ -260,8 +248,6 @@ app.get('/api/vendor-status/:vendor_id', async (req, res) => {
     res.status(500).json({ error: error.message });
   }
 });
-
-// ========== ENDPOINTS EXISTENTES (sin cambios) ==========
 
 // ========== CREAR CUSTOMER ==========
 app.post('/api/create-customer', async (req, res) => {
@@ -347,7 +333,7 @@ function _getStatusMessage(status) {
   return messages[status] || 'Estado desconocido';
 }
 
-// ========== PÁGINA DE REDIRECCIÓN POST-ONBOARDING ==========
+// ========== PÁGINA DE REDIRECCIÓN ==========
 app.get('/onboarding-completo', (req, res) => {
   res.send(`
     <!DOCTYPE html>
