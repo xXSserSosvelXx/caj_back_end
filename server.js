@@ -157,11 +157,14 @@ app.post('/api/create-payment-intent', async (req, res) => {
       vendor_id,
       currency = 'usd',
       description = 'Pago en Cajero Emprender',
-      is_subscription = false
+      is_subscription = false,
+      payment_method_id, // ← Añadir esta línea
+      customer_id,       // ← Opcional, pero recomendado
     } = req.body;
 
     const amountInCents = typeof amount === 'number' ? amount : Math.round(amount * 100);
 
+    // Para suscripciones, no usamos payment_method aquí (se maneja aparte)
     if (is_subscription) {
       const paymentIntent = await stripe.paymentIntents.create({
         amount: amountInCents,
@@ -177,37 +180,36 @@ app.post('/api/create-payment-intent', async (req, res) => {
       });
     }
 
-    if (vendor_id) {
-      const commission_rate = 0.05;
-      const application_fee = Math.max(50, Math.round(amountInCents * commission_rate));
-      const vendor_amount = amountInCents - application_fee;
-
-      const paymentIntent = await stripe.paymentIntents.create({
-        amount: amountInCents,
-        currency: currency,
-        application_fee_amount: application_fee,
-        transfer_data: {
-          destination: vendor_id,
-        },
-        description: description,
-        statement_descriptor: 'CAJERO EMPRENDER',
-      });
-
-      return res.json({
-        id: paymentIntent.id,
-        client_secret: paymentIntent.client_secret,
-        status: paymentIntent.status,
-        vendor_amount: vendor_amount,
-        commission: application_fee,
-      });
-    }
-
-    const paymentIntent = await stripe.paymentIntents.create({
+    // Configuración base del PaymentIntent
+    const intentParams = {
       amount: amountInCents,
       currency: currency,
       description: description,
       statement_descriptor: 'CAJERO EMPRENDER',
-    });
+      // 🔑 Clave para poder confirmar después desde el frontend
+      confirmation_method: 'manual',
+      confirm: false,
+    };
+
+    // Si viene un payment_method_id, lo asignamos
+    if (payment_method_id) {
+      intentParams.payment_method = payment_method_id;
+    }
+
+    // Si viene customer_id, lo asignamos
+    if (customer_id) {
+      intentParams.customer = customer_id;
+    }
+
+    // Si es pago con vendedor (Stripe Connect)
+    if (vendor_id) {
+      const commission_rate = 0.05;
+      const application_fee = Math.max(50, Math.round(amountInCents * commission_rate));
+      intentParams.application_fee_amount = application_fee;
+      intentParams.transfer_data = { destination: vendor_id };
+    }
+
+    const paymentIntent = await stripe.paymentIntents.create(intentParams);
 
     res.json({
       id: paymentIntent.id,
