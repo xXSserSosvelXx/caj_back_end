@@ -1,9 +1,8 @@
-// server.js
+// server.js — BACKEND CON PAYWAY (PARAGUAY)
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const nodemailer = require('nodemailer');
+const axios = require('axios'); // Para llamar a Payway API
 
 const app = express();
 
@@ -11,7 +10,12 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
-// Configuración de correo
+// Configuración de Payway
+const PAYWAY_API_KEY = process.env.PAYWAY_API_KEY; // Obtén esto en https://www.payway.com.py/
+const PAYWAY_API_URL = 'https://api.payway.com.py/v1';
+
+// Configuración de correo (opcional)
+const nodemailer = require('nodemailer');
 const transporter = nodemailer.createTransport({
   host: 'smtp.gmail.com',
   port: 587,
@@ -22,114 +26,129 @@ const transporter = nodemailer.createTransport({
   },
 });
 
-// ✅ CORREGIDO: Devuelve la clave PÚBLICA
-app.get('/api/stripe-key', (req, res) => {
-  const publishableKey = process.env.STRIPE_PUBLISHABLE_KEY; // ← NO la secreta
-  if (!publishableKey) {
-    return res.status(500).json({ error: 'Clave pública no configurada' });
-  }
-  res.json({ publishableKey });
-});
-
 // Ruta raíz
 app.get('/', (req, res) => {
-  res.json({ message: 'Backend funcionando con Stripe Connect' });
+  res.json({
+    message: 'Backend de Payway para Cajero Emprender',
+    status: 'online',
+    endpoints: {
+      createPayment: 'POST /api/create-payment',
+      verifyPayment: 'GET /api/verify-payment/:paymentId',
+    }
+  });
 });
 
-// ========== CREAR CUENTA VENDEDOR (PARAGUAY) ==========
-app.post('/api/create-vendor-account', async (req, res) => {
-  try {
-    const { email, name, phone } = req.body;
-    const account = await stripe.accounts.create({
-      type: 'standard',
-      country: 'PY', // ✅ Corregido a Paraguay
-      email,
-      capabilities: {
-        card_payments: { requested: true },
-        transfers: { requested: true },
-      },
-    });
-    res.json({ vendor_id: account.id });
-  } catch (error) {
-    console.error('Error creando cuenta vendedor:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// ========== CREAR PAYMENT INTENT (CON COMISIÓN) ==========
-app.post('/api/create-payment-intent', async (req, res) => {
+// ========== CREAR PAGO EN PAYWAY ==========
+app.post('/api/create-payment', async (req, res) => {
   try {
     const { 
-      amount,              // En guaraníes (₲)
-      vendor_id,           // ID del vendedor (destino)
-      payment_method_id,   // ID del método de pago
-      customer_id,         // ID del cliente en Stripe
+      amount,           // en Gs (ej: 50000)
+      email,            // email del cliente
+      paymentMethod,    // 'tigo_money', 'transferencia', 'debit_card', etc.
       description = 'Pago en Cajero Emprender',
+      vendorId,         // opcional, para comisiones
     } = req.body;
 
-    // Convertir ₲ → USD (ej: 1 USD = 7.500 ₲ → ajusta según tasa)
-    const exchangeRate = 7500; // ⚠️ Usa una tasa dinámica en producción
-    const amountUSD = Math.round(amount / exchangeRate);
-    const amountInCents = amountUSD * 100;
+    if (!amount || !email || !paymentMethod) {
+      return res.status(400).json({ error: 'Faltan datos requeridos' });
+    }
 
-    // Comisión del 5%
-    const commission = Math.max(50, Math.round(amountInCents * 0.05));
-    const vendorAmount = amountInCents - commission;
+    // Si tienes comisiones, calcula aquí
+    // Ej: comisión del 5% → monto_vendedor = amount * 0.95
 
-    // Configuración del PaymentIntent
-    const paymentIntent = await stripe.paymentIntents.create({
-      amount: amountInCents,
-      currency: 'usd',
-      payment_method: payment_method_id,
-      customer: customer_id,
-      confirmation_method: 'manual',
-      confirm: false, // ← Se confirma desde el frontend
-      description,
-      application_fee_amount: commission,
-      ...(vendor_id && {
-        transfer_data: { destination: vendor_id },
-      }),
-    });
+    const paywayResponse = await axios.post(
+      `${PAYWAY_API_URL}/payments`,
+      {
+        amount: Math.round(amount), // en Gs, sin decimales
+        currency: 'PYG',
+        email: email,
+        payment_method: paymentMethod,
+        description: description,
+        // Si usas comisiones, agrega:
+        // vendor_id: vendorId,
+        // commission: Math.round(amount * 0.05),
+      },
+      {
+        headers: {
+          'Authorization': `Bearer ${PAYWAY_API_KEY}`,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    const { id, payment_url, status } = paywayResponse.data;
 
     res.json({
-      id: paymentIntent.id,
-      client_secret: paymentIntent.client_secret,
+      payment_id: id,
+      payment_url: payment_url, // URL para redirigir al cliente
+      status: status,
     });
+
   } catch (error) {
-    console.error('Error creando PaymentIntent:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Error creando pago en Payway:', error.response?.data || error.message);
+    res.status(500).json({ 
+      error: 'Error al crear el pago', 
+      details: error.response?.data?.message || error.message 
+    });
   }
 });
 
-// ========== WEBHOOK PARA PAGOS EXITOSOS ==========
-app.post('/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
-  const sig = req.headers['stripe-signature'];
-  const endpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
-
-  let event;
+// ========== VERIFICAR ESTADO DEL PAGO ==========
+app.get('/api/verify-payment/:paymentId', async (req, res) => {
   try {
-    event = stripe.webhooks.constructEvent(req.body, sig, endpointSecret);
-  } catch (err) {
-    console.error(`Webhook Error: ${err.message}`);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
-  }
+    const { paymentId } = req.params;
 
-  // Manejar eventos
-  if (event.type === 'payment_intent.succeeded') {
-    const paymentIntent = event.data.object;
-    console.log('✅ Pago exitoso:', paymentIntent.id);
-    
-    // Aquí puedes:
-    // 1. Actualizar tu base de datos
-    // 2. Notificar al vendedor
-    // 3. Enviar factura por email
-  }
+    const paywayResponse = await axios.get(
+      `${PAYWAY_API_URL}/payments/${paymentId}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${PAYWAY_API_KEY}`,
+        },
+      }
+    );
 
-  res.json({ received: true });
+    const { status, amount, email, payment_method } = paywayResponse.data;
+
+    res.json({
+      payment_id: paymentId,
+      status: status, // 'approved', 'pending', 'rejected'
+      amount: amount,
+      email: email,
+      payment_method: payment_method,
+    });
+
+  } catch (error) {
+    console.error('Error verificando pago:', error.response?.data || error.message);
+    res.status(500).json({ error: 'Error al verificar el pago' });
+  }
 });
 
-// Iniciar servidor
+// ========== ENVIAR CORREO (opcional) ==========
+app.post('/api/send-payment-email', async (req, res) => {
+  try {
+    const { email, amount, paymentId } = req.body;
+    const mailOptions = {
+      from: `"Cajero Emprender" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: '✅ Pago Recibido - Cajero Emprender',
+      html: `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2>¡Pago confirmado!</h2>
+          <p>Tu pago de <strong>₲${Number(amount).toLocaleString()}</strong> ha sido procesado exitosamente.</p>
+          <p>ID de pago: <code>${paymentId}</code></p>
+        </div>
+      `,
+    };
+    await transporter.sendMail(mailOptions);
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Error enviando correo:', error);
+    res.status(500).json({ error: 'Error al enviar correo' });
+  }
+});
+
+// ========== INICIAR SERVIDOR ==========
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`Servidor corriendo en puerto ${PORT}`);
+  console.log(`✅ Servidor Payway corriendo en puerto ${PORT}`);
 });
